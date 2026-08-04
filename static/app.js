@@ -4,7 +4,7 @@ let currentPage = 'clusters';
 // Init
 loadClusters();
 document.getElementById('clusterSelect').addEventListener('change', function(e){
-    if(e.target.value === '') { showPage('clusters'); toggleAddForm(); return; }
+    if(e.target.value === '') { showPage('clusters'); return; }
     currentCluster = e.target.value;
     showPage('dashboard');
     loadDashboard();
@@ -61,6 +61,8 @@ function selectCluster(id) {
 function toggleAddForm() {
     let f = document.getElementById('addClusterForm');
     f.style.display = f.style.display === 'none' ? 'block' : 'none';
+    document.getElementById('page-clusters').classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-clusters').classList.add('active');
 }
 
