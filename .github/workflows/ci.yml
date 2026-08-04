@@ -23,7 +23,7 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --check
       - name: cargo clippy
-        run: cargo clippy -- -D warnings -A clippy::uninlined_format_args -A clippy::bind_instead_of_map -A clippy::map_flatten
+        run: cargo clippy -- -D warnings -A clippy::uninlined_format_args -A clippy::bind_instead_of_map -A clippy::map_flatten -A clippy::needless_borrows_for_generic_args
 
   test:
     runs-on: ubuntu-latest

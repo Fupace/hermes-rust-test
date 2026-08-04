@@ -29,31 +29,68 @@ async fn main() {
 
     db::schema::run_migrations(&pool).await;
 
-    let app_state = api::AppState { pool: pool.clone() };
+    let state = api::AppState { pool };
 
     let app = Router::new()
         .route("/health", get(api::handlers::health_check))
-        .route("/api/cluster/summary", get(api::handlers::cluster_summary))
-        .route("/api/pods", get(api::handlers::list_pods))
-        .route("/api/deployments", get(api::handlers::list_deployments))
-        .route("/api/services", get(api::handlers::list_services))
-        .route("/api/namespaces", get(api::handlers::list_namespaces))
         .route(
-            "/api/namespaces/{ns}/pods/{pod}/logs",
+            "/api/clusters",
+            get(api::handlers::list_clusters).post(api::handlers::add_cluster),
+        )
+        .route(
+            "/api/clusters/{id}",
+            get(api::handlers::get_cluster).delete(api::handlers::delete_cluster),
+        )
+        .route(
+            "/api/clusters/{id}/summary",
+            get(api::handlers::cluster_summary),
+        )
+        .route("/api/clusters/{id}/pods", get(api::handlers::list_pods))
+        .route(
+            "/api/clusters/{id}/deployments",
+            get(api::handlers::list_deployments).post(api::handlers::create_deployment),
+        )
+        .route(
+            "/api/clusters/{id}/services",
+            get(api::handlers::list_services),
+        )
+        .route("/api/clusters/{id}/nodes", get(api::handlers::list_nodes))
+        .route("/api/clusters/{id}/pvcs", get(api::handlers::list_pvcs))
+        .route(
+            "/api/clusters/{id}/configmaps",
+            get(api::handlers::list_configmaps),
+        )
+        .route(
+            "/api/clusters/{id}/secrets",
+            get(api::handlers::list_secrets),
+        )
+        .route(
+            "/api/clusters/{id}/namespaces",
+            get(api::handlers::list_namespaces),
+        )
+        .route(
+            "/api/clusters/{id}/namespaces/{ns}/pods/{pod}/logs",
             get(api::handlers::pod_logs),
+        )
+        .route(
+            "/api/clusters/{id}/namespaces/{ns}/pods/{pod}/yaml",
+            get(api::handlers::pod_yaml),
+        )
+        .route(
+            "/api/clusters/{id}/namespaces/{ns}/deployments/{name}/yaml",
+            get(api::handlers::deployment_yaml),
         )
         .nest_service("/", ServeDir::new("static"))
         .layer(CorsLayer::permissive())
-        .with_state(app_state);
+        .with_state(state);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".into())
         .parse()
         .unwrap_or(8080);
-
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("Hermes K8s Platform listening on {}", addr);
-
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    tracing::info!("Hermes K8s Platform v0.2 listening on {}", addr);
+    axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app)
+        .await
+        .unwrap();
 }

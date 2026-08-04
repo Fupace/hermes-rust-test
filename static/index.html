@@ -1,74 +1,54 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Hermes K8s Platform</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <nav class="topbar">
   <div class="logo">⚓ Hermes K8s</div>
-  <div class="nav-links">
-    <a href="#" data-page="dashboard" class="active">Dashboard</a>
-    <a href="#" data-page="pods">Pods</a>
-    <a href="#" data-page="deployments">Deployments</a>
-    <a href="#" data-page="services">Services</a>
-    <a href="#" data-page="namespaces">Namespaces</a>
-  </div>
+  <div class="nav-links" id="navLinks"></div>
   <div class="nav-right">
+    <select id="clusterSelect" class="cluster-select"><option value="">+ 添加集群</option></select>
     <span id="clusterStatus" class="status-dot"></span>
   </div>
 </nav>
 
-<main class="content">
-  <section id="page-dashboard" class="page active">
-    <h2>Cluster Overview</h2>
-    <div class="stats-grid" id="statsGrid">
-      <div class="stat-card"><div class="stat-value" id="statNamespaces">-</div><div class="stat-label">Namespaces</div></div>
-      <div class="stat-card"><div class="stat-value" id="statNodes">-</div><div class="stat-label">Nodes</div></div>
-      <div class="stat-card"><div class="stat-value" id="statPods">-</div><div class="stat-label">Pods</div></div>
-      <div class="stat-card"><div class="stat-value" id="statDeployments">-</div><div class="stat-label">Deployments</div></div>
-      <div class="stat-card"><div class="stat-value" id="statServices">-</div><div class="stat-label">Services</div></div>
+<main class="content" id="mainContent">
+  <section id="page-clusters" class="page active">
+    <h2>集群管理</h2>
+    <div id="clusterList" class="cluster-grid"></div>
+    <div class="add-cluster-form" id="addClusterForm" style="display:none">
+      <h3>添加集群</h3>
+      <input id="clusterName" placeholder="集群名称" class="input">
+      <textarea id="clusterKubeconfig" placeholder="粘贴 kubeconfig（base64 或原始 YAML）" class="textarea"></textarea>
+      <input id="clusterDesc" placeholder="描述（可选）" class="input">
+      <button onclick="addCluster()" class="btn btn-primary">添加</button>
+      <button onclick="toggleAddForm()" class="btn">取消</button>
     </div>
   </section>
-
-  <section id="page-pods" class="page">
-    <div class="page-header">
-      <h2>Pods</h2>
-      <select id="podNsFilter" class="ns-filter"><option value="">All Namespaces</option></select>
-    </div>
-    <div class="table-wrap"><table id="podsTable"><thead><tr><th>Name</th><th>Namespace</th><th>Status</th><th>Node</th><th>Restarts</th><th>Age</th><th>Actions</th></tr></thead><tbody></tbody></table></div>
-  </section>
-
-  <section id="page-deployments" class="page">
-    <div class="page-header">
-      <h2>Deployments</h2>
-      <select id="deployNsFilter" class="ns-filter"><option value="">All Namespaces</option></select>
-    </div>
-    <div class="table-wrap"><table id="deploymentsTable"><thead><tr><th>Name</th><th>Namespace</th><th>Replicas</th><th>Ready</th><th>Available</th><th>Age</th><th>Containers</th></tr></thead><tbody></tbody></table></div>
-  </section>
-
-  <section id="page-services" class="page">
-    <div class="page-header">
-      <h2>Services</h2>
-      <select id="svcNsFilter" class="ns-filter"><option value="">All Namespaces</option></select>
-    </div>
-    <div class="table-wrap"><table id="servicesTable"><thead><tr><th>Name</th><th>Namespace</th><th>Type</th><th>Cluster IP</th><th>Ports</th><th>Age</th></tr></thead><tbody></tbody></table></div>
-  </section>
-
-  <section id="page-namespaces" class="page">
-    <h2>Namespaces</h2>
-    <div class="table-wrap"><table id="namespacesTable"><thead><tr><th>Name</th><th>Status</th><th>Age</th></tr></thead><tbody></tbody></table></div>
-  </section>
+  <section id="page-dashboard" class="page"><h2>集群概览</h2><div class="stats-grid" id="statsGrid"></div></section>
+  <section id="page-pods" class="page"><div class="page-header"><h2>Pods</h2><select id="podNs" class="ns-filter"><option value="">全部命名空间</option></select></div><div class="table-wrap"><table id="podsTable"><thead><tr><th>名称</th><th>命名空间</th><th>状态</th><th>节点</th><th>重启</th><th>Age</th><th>操作</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-deployments" class="page"><div class="page-header"><h2>Deployments</h2><select id="deployNs" class="ns-filter"><option value="">全部命名空间</option></select><button onclick="showCreateDeploy()" class="btn btn-primary btn-sm">+ 创建</button></div><div class="table-wrap"><table id="deploymentsTable"><thead><tr><th>名称</th><th>命名空间</th><th>副本</th><th>就绪</th><th>可用</th><th>Age</th><th>操作</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-services" class="page"><div class="page-header"><h2>Services</h2><select id="svcNs" class="ns-filter"><option value="">全部命名空间</option></select></div><div class="table-wrap"><table id="servicesTable"><thead><tr><th>名称</th><th>命名空间</th><th>类型</th><th>Cluster IP</th><th>端口</th><th>Age</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-nodes" class="page"><h2>Nodes</h2><div class="table-wrap"><table id="nodesTable"><thead><tr><th>名称</th><th>状态</th><th>角色</th><th>版本</th><th>CPU</th><th>内存</th><th>Age</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-pvcs" class="page"><div class="page-header"><h2>PVCs</h2><select id="pvcNs" class="ns-filter"><option value="">全部命名空间</option></select></div><div class="table-wrap"><table id="pvcsTable"><thead><tr><th>名称</th><th>命名空间</th><th>状态</th><th>容量</th><th>StorageClass</th><th>Age</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-configmaps" class="page"><div class="page-header"><h2>ConfigMaps</h2><select id="cmNs" class="ns-filter"><option value="">全部命名空间</option></select></div><div class="table-wrap"><table id="configmapsTable"><thead><tr><th>名称</th><th>命名空间</th><th>Keys</th><th>Age</th></tr></thead><tbody></tbody></table></div></section>
+  <section id="page-secrets" class="page"><div class="page-header"><h2>Secrets</h2><select id="secNs" class="ns-filter"><option value="">全部命名空间</option></select></div><div class="table-wrap"><table id="secretsTable"><thead><tr><th>名称</th><th>命名空间</th><th>类型</th><th>Keys</th><th>Age</th></tr></thead><tbody></tbody></table></div></section>
 </main>
 
-<div id="logsModal" class="modal">
-  <div class="modal-content">
-    <div class="modal-header"><span id="logsTitle">Pod Logs</span><button id="closeLogs" class="close-btn">&times;</button></div>
-    <pre id="logsContent"></pre>
+<div id="modal" class="modal"><div class="modal-content"><div class="modal-header"><span id="modalTitle"></span><button class="close-btn" onclick="closeModal()">&times;</button></div><pre id="modalBody"></pre></div></div>
+<div id="createDeployModal" class="modal"><div class="modal-content" style="max-width:500px"><div class="modal-header"><span>创建 Deployment</span><button class="close-btn" onclick="closeCreateDeploy()">&times;</button></div>
+  <div style="padding:16px">
+    <input id="cdName" placeholder="名称" class="input"><br>
+    <input id="cdNamespace" placeholder="命名空间" class="input"><br>
+    <input id="cdImage" placeholder="镜像 (如 nginx:latest)" class="input"><br>
+    <input id="cdReplicas" placeholder="副本数 (默认1)" class="input" type="number"><br>
+    <input id="cdPort" placeholder="端口 (默认8080)" class="input" type="number"><br>
+    <button onclick="createDeployment()" class="btn btn-primary">创建</button>
   </div>
-</div>
+</div></div>
 
 <script src="/app.js"></script>
 </body>

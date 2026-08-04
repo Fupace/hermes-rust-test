@@ -1,276 +1,455 @@
 use crate::models::k8s::*;
+use base64::Engine;
 use reqwest::Client;
 use serde_json::Value;
-use std::env;
 
-fn k8s_base() -> (String, Client) {
-    use base64::Engine;
-
-    let host = env::var("K8S_HOST").unwrap_or_else(|_| "kubernetes.default.svc".into());
-    let port = env::var("K8S_PORT").unwrap_or_else(|_| "443".into());
-    let base = format!("https://{}:{}", host, port);
-
-    let cert_b64 = env::var("K8S_CLIENT_CERT_B64").unwrap_or_default();
-    let key_b64 = env::var("K8S_CLIENT_KEY_B64").unwrap_or_default();
+fn build_client(kubeconfig_b64: &str) -> Result<Client, String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(kubeconfig_b64)
+        .map_err(|e| format!("base64: {}", e))?;
+    let config: Value = serde_yaml::from_slice(&decoded).map_err(|e| format!("yaml: {}", e))?;
 
     let mut builder = Client::builder().danger_accept_invalid_certs(true);
 
-    if !cert_b64.is_empty() && !key_b64.is_empty() {
-        let cert_pem = base64::engine::general_purpose::STANDARD
-            .decode(&cert_b64)
-            .unwrap_or_default();
-        let key_pem = base64::engine::general_purpose::STANDARD
-            .decode(&key_b64)
-            .unwrap_or_default();
-        let identity_pem = String::from_utf8_lossy(&cert_pem).to_string()
-            + "\n"
-            + &String::from_utf8_lossy(&key_pem);
-        if let Ok(identity) = reqwest::Identity::from_pem(identity_pem.as_bytes()) {
-            builder = builder.identity(identity);
+    if let Some(users) = config["users"].as_array() {
+        if let Some(user) = users.first() {
+            if let (Some(cert), Some(key)) = (
+                user["user"]["client-certificate-data"].as_str(),
+                user["user"]["client-key-data"].as_str(),
+            ) {
+                let cert_pem = base64::engine::general_purpose::STANDARD
+                    .decode(cert)
+                    .unwrap_or_default();
+                let key_pem = base64::engine::general_purpose::STANDARD
+                    .decode(key)
+                    .unwrap_or_default();
+                let pem = String::from_utf8_lossy(&cert_pem).to_string()
+                    + "
+" + &String::from_utf8_lossy(&key_pem);
+                if let Ok(id) = reqwest::Identity::from_pem(pem.as_bytes()) {
+                    builder = builder.identity(id);
+                }
+            }
         }
     }
 
-    let client = builder.build().unwrap_or_default();
-    (base, client)
+    Ok(builder.build().unwrap_or_default())
 }
 
-pub async fn get_json(path: &str) -> Result<Value, String> {
-    let (base, client) = k8s_base();
-    let url = format!("{}{}", base, path);
-    let token = env::var("K8S_TOKEN").unwrap_or_default();
+fn get_server(kubeconfig_b64: &str) -> Result<String, String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(kubeconfig_b64)
+        .map_err(|e| format!("base64: {}", e))?;
+    let config: Value = serde_yaml::from_slice(&decoded).map_err(|e| format!("yaml: {}", e))?;
+    config["clusters"][0]["cluster"]["server"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "no server found".into())
+}
 
-    let mut req = client.get(&url).header("Accept", "application/json");
-    if !token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let resp = req
+pub async fn k8s_get(kubeconfig: &str, path: &str) -> Result<Value, String> {
+    let client = build_client(kubeconfig)?;
+    let server = get_server(kubeconfig)?;
+    let url = format!("{}{}", server, path);
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| format!("K8s API error: {}", e))?;
-    let body: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("JSON parse error: {}", e))?;
-    Ok(body)
+        .map_err(|e| format!("request: {}", e))?;
+    resp.json().await.map_err(|e| format!("json: {}", e))
 }
 
-fn age_from_timestamp(ts: &str) -> String {
+pub async fn k8s_get_raw(kubeconfig: &str, path: &str) -> Result<String, String> {
+    let client = build_client(kubeconfig)?;
+    let server = get_server(kubeconfig)?;
+    let url = format!("{}{}", server, path);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+    resp.text().await.map_err(|e| format!("text: {}", e))
+}
+
+pub async fn k8s_post(kubeconfig: &str, path: &str, body: &Value) -> Result<Value, String> {
+    let client = build_client(kubeconfig)?;
+    let server = get_server(kubeconfig)?;
+    let url = format!("{}{}", server, path);
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("text: {}", e))?;
+    if status.is_success() {
+        serde_json::from_str(&text)
+            .map_err(|e| format!("json parse: {} from '{}'", e, &text[..200.min(text.len())]))
+    } else {
+        Err(format!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            &text[..300.min(text.len())]
+        ))
+    }
+}
+
+#[allow(dead_code)]
+pub async fn k8s_delete(kubeconfig: &str, path: &str) -> Result<Value, String> {
+    let client = build_client(kubeconfig)?;
+    let server = get_server(kubeconfig)?;
+    let url = format!("{}{}", server, path);
+    let resp = client
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("request: {}", e))?;
+    resp.json().await.map_err(|e| format!("json: {}", e))
+}
+
+fn age(ts: &str) -> String {
     if ts.is_empty() {
         return "unknown".into();
     }
     ts[..ts.len().min(19)].replace('T', " ")
 }
 
-pub async fn get_cluster_summary() -> Result<ClusterSummary, String> {
-    let namespaces = get_json("/api/v1/namespaces").await?;
-    let pods = get_json("/api/v1/pods").await?;
-    let nodes = get_json("/api/v1/nodes").await?;
-    let deployments: Value = get_json("/apis/apps/v1/deployments")
-        .await
-        .unwrap_or(serde_json::json!({"items": []}));
-    let services: Value = get_json("/api/v1/services")
-        .await
-        .unwrap_or(serde_json::json!({"items": []}));
+// --- Resource fetchers ---
 
+pub async fn get_cluster_summary(kc: &str) -> Result<ClusterSummary, String> {
+    let ns = k8s_get(kc, "/api/v1/namespaces").await?;
+    let pods = k8s_get(kc, "/api/v1/pods").await?;
+    let nodes = k8s_get(kc, "/api/v1/nodes").await?;
+    let deploys = k8s_get(kc, "/apis/apps/v1/deployments")
+        .await
+        .unwrap_or(serde_json::json!({"items":[]}));
+    let svcs = k8s_get(kc, "/api/v1/services")
+        .await
+        .unwrap_or(serde_json::json!({"items":[]}));
+    let pvcs = k8s_get(kc, "/api/v1/persistentvolumeclaims")
+        .await
+        .unwrap_or(serde_json::json!({"items":[]}));
     Ok(ClusterSummary {
-        namespaces: namespaces["items"].as_array().map(|a| a.len()).unwrap_or(0),
+        namespaces: ns["items"].as_array().map(|a| a.len()).unwrap_or(0),
         pods: pods["items"].as_array().map(|a| a.len()).unwrap_or(0),
-        deployments: deployments["items"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0),
-        services: services["items"].as_array().map(|a| a.len()).unwrap_or(0),
+        deployments: deploys["items"].as_array().map(|a| a.len()).unwrap_or(0),
+        services: svcs["items"].as_array().map(|a| a.len()).unwrap_or(0),
         nodes: nodes["items"].as_array().map(|a| a.len()).unwrap_or(0),
+        pvcs: pvcs["items"].as_array().map(|a| a.len()).unwrap_or(0),
     })
 }
 
-pub async fn list_namespaces_handler() -> Result<Vec<NamespaceInfo>, String> {
-    let data = get_json("/api/v1/namespaces").await?;
+pub async fn list_namespaces(kc: &str) -> Result<Vec<NamespaceInfo>, String> {
+    let data = k8s_get(kc, "/api/v1/namespaces").await?;
     let Some(items) = data["items"].as_array() else {
         return Ok(vec![]);
     };
-    let mut result = Vec::new();
-    for item in items {
-        let meta = &item["metadata"];
-        let status = &item["status"];
-        let name = meta["name"].as_str().unwrap_or("").to_string();
-        let phase = status["phase"].as_str().unwrap_or("Active").to_string();
-        let created = meta["creationTimestamp"].as_str().unwrap_or("");
-        result.push(NamespaceInfo {
-            name,
-            status: phase,
-            age: age_from_timestamp(created),
-        });
-    }
-    Ok(result)
+    Ok(items
+        .iter()
+        .map(|i| NamespaceInfo {
+            name: i["metadata"]["name"].as_str().unwrap_or("").into(),
+            status: i["status"]["phase"].as_str().unwrap_or("Active").into(),
+            age: age(i["metadata"]["creationTimestamp"].as_str().unwrap_or("")),
+        })
+        .collect())
 }
 
-pub async fn list_pods_handler(ns: Option<&str>) -> Result<Vec<PodInfo>, String> {
-    let path = if let Some(ns) = ns {
-        format!("/api/v1/namespaces/{}/pods", ns)
-    } else {
-        "/api/v1/pods".to_string()
-    };
-    let data = get_json(&path).await?;
+pub async fn list_pods(kc: &str, ns: Option<&str>) -> Result<Vec<PodInfo>, String> {
+    let path = ns.map_or("/api/v1/pods".into(), |n| {
+        format!("/api/v1/namespaces/{}/pods", n)
+    });
+    let data = k8s_get(kc, &path).await?;
     let Some(items) = data["items"].as_array() else {
         return Ok(vec![]);
     };
-    let mut result = Vec::new();
-    for item in items {
-        let meta = &item["metadata"];
-        let spec = &item["spec"];
-        let status = &item["status"];
-        let name = meta["name"].as_str().unwrap_or("").to_string();
-        let namespace = meta["namespace"].as_str().unwrap_or("").to_string();
-        let pod_status = status["phase"].as_str().unwrap_or("Unknown").to_string();
-        let node = spec["nodeName"].as_str().unwrap_or("-").to_string();
-        let created = meta["creationTimestamp"].as_str().unwrap_or("");
-        let restarts = status["containerStatuses"]
-            .as_array()
-            .map(|cs| {
-                cs.iter()
-                    .map(|c| c["restartCount"].as_i64().unwrap_or(0) as i32)
-                    .sum()
-            })
-            .unwrap_or(0);
-        let containers = spec["containers"]
-            .as_array()
-            .map(|cs| {
-                cs.iter()
-                    .map(|c| {
-                        let cname = c["name"].as_str().unwrap_or("").to_string();
-                        ContainerInfo {
-                            name: cname.clone(),
-                            image: c["image"].as_str().unwrap_or("").to_string(),
-                            ready: status["containerStatuses"]
-                                .as_array()
-                                .map(|scs| {
-                                    scs.iter().any(|sc| {
-                                        sc["name"].as_str() == Some(&cname)
-                                            && sc["ready"].as_bool().unwrap_or(false)
+    Ok(items
+        .iter()
+        .map(|i| {
+            let meta = &i["metadata"];
+            let spec = &i["spec"];
+            let status = &i["status"];
+            let name = meta["name"].as_str().unwrap_or("");
+            let containers = spec["containers"]
+                .as_array()
+                .map(|cs| {
+                    cs.iter()
+                        .map(|c| {
+                            let cn = c["name"].as_str().unwrap_or("");
+                            ContainerInfo {
+                                name: cn.into(),
+                                image: c["image"].as_str().unwrap_or("").into(),
+                                ready: status["containerStatuses"]
+                                    .as_array()
+                                    .map(|scs| {
+                                        scs.iter().any(|sc| {
+                                            sc["name"].as_str() == Some(cn)
+                                                && sc["ready"].as_bool().unwrap_or(false)
+                                        })
                                     })
-                                })
-                                .unwrap_or(false),
-                        }
+                                    .unwrap_or(false),
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            PodInfo {
+                name: name.into(),
+                namespace: meta["namespace"].as_str().unwrap_or("").into(),
+                status: status["phase"].as_str().unwrap_or("Unknown").into(),
+                node: spec["nodeName"].as_str().unwrap_or("-").into(),
+                restarts: status["containerStatuses"]
+                    .as_array()
+                    .map(|cs| {
+                        cs.iter()
+                            .map(|c| c["restartCount"].as_i64().unwrap_or(0) as i32)
+                            .sum()
                     })
-                    .collect()
-            })
-            .unwrap_or_default();
-        result.push(PodInfo {
-            name,
-            namespace,
-            status: pod_status,
-            node,
-            restarts,
-            age: age_from_timestamp(created),
-            containers,
-        });
-    }
-    Ok(result)
+                    .unwrap_or(0),
+                age: age(meta["creationTimestamp"].as_str().unwrap_or("")),
+                containers,
+            }
+        })
+        .collect())
 }
 
-pub async fn list_deployments_handler(ns: Option<&str>) -> Result<Vec<DeploymentInfo>, String> {
-    let path = if let Some(ns) = ns {
-        format!("/apis/apps/v1/namespaces/{}/deployments", ns)
-    } else {
-        "/apis/apps/v1/deployments".to_string()
-    };
-    let data = get_json(&path).await?;
+pub async fn list_deployments(kc: &str, ns: Option<&str>) -> Result<Vec<DeploymentInfo>, String> {
+    let path = ns.map_or("/apis/apps/v1/deployments".into(), |n| {
+        format!("/apis/apps/v1/namespaces/{}/deployments", n)
+    });
+    let data = k8s_get(kc, &path).await?;
     let Some(items) = data["items"].as_array() else {
         return Ok(vec![]);
     };
-    let mut result = Vec::new();
-    for item in items {
-        let meta = &item["metadata"];
-        let spec = &item["spec"];
-        let status = &item["status"];
-        let name = meta["name"].as_str().unwrap_or("").to_string();
-        let namespace = meta["namespace"].as_str().unwrap_or("").to_string();
-        let replicas = spec["replicas"].as_i64().unwrap_or(0) as i32;
-        let ready = status["readyReplicas"].as_i64().unwrap_or(0) as i32;
-        let available = status["availableReplicas"].as_i64().unwrap_or(0) as i32;
-        let created = meta["creationTimestamp"].as_str().unwrap_or("");
-        let containers = spec["template"]["spec"]["containers"]
-            .as_array()
-            .map(|cs| {
-                cs.iter()
-                    .map(|c| c["name"].as_str().unwrap_or("").to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        result.push(DeploymentInfo {
-            name,
-            namespace,
-            replicas,
-            ready,
-            available,
-            age: age_from_timestamp(created),
-            containers,
-        });
-    }
-    Ok(result)
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            let s = &i["spec"];
+            let st = &i["status"];
+            DeploymentInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                namespace: m["namespace"].as_str().unwrap_or("").into(),
+                replicas: s["replicas"].as_i64().unwrap_or(0) as i32,
+                ready: st["readyReplicas"].as_i64().unwrap_or(0) as i32,
+                available: st["availableReplicas"].as_i64().unwrap_or(0) as i32,
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+                containers: s["template"]["spec"]["containers"]
+                    .as_array()
+                    .map(|cs| {
+                        cs.iter()
+                            .map(|c| c["name"].as_str().unwrap_or("").into())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            }
+        })
+        .collect())
 }
 
-pub async fn list_services_handler(ns: Option<&str>) -> Result<Vec<ServiceInfo>, String> {
-    let path = if let Some(ns) = ns {
-        format!("/api/v1/namespaces/{}/services", ns)
-    } else {
-        "/api/v1/services".to_string()
-    };
-    let data = get_json(&path).await?;
+pub async fn list_services(kc: &str, ns: Option<&str>) -> Result<Vec<ServiceInfo>, String> {
+    let path = ns.map_or("/api/v1/services".into(), |n| {
+        format!("/api/v1/namespaces/{}/services", n)
+    });
+    let data = k8s_get(kc, &path).await?;
     let Some(items) = data["items"].as_array() else {
         return Ok(vec![]);
     };
-    let mut result = Vec::new();
-    for item in items {
-        let meta = &item["metadata"];
-        let spec = &item["spec"];
-        let name = meta["name"].as_str().unwrap_or("").to_string();
-        let namespace = meta["namespace"].as_str().unwrap_or("").to_string();
-        let svc_type = spec["type"].as_str().unwrap_or("ClusterIP").to_string();
-        let cluster_ip = spec["clusterIP"].as_str().unwrap_or("None").to_string();
-        let created = meta["creationTimestamp"].as_str().unwrap_or("");
-        let ports = spec["ports"]
-            .as_array()
-            .map(|ps| {
-                ps.iter()
-                    .map(|p| {
-                        let port = p["port"].as_i64().unwrap_or(0);
-                        let proto = p["protocol"].as_str().unwrap_or("TCP");
-                        let target = p["targetPort"]
-                            .as_i64()
-                            .map(|t| t.to_string())
-                            .unwrap_or_else(|| p["targetPort"].as_str().unwrap_or("?").to_string());
-                        format!("{}/{} -> {}", port, proto, target)
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            let s = &i["spec"];
+            ServiceInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                namespace: m["namespace"].as_str().unwrap_or("").into(),
+                service_type: s["type"].as_str().unwrap_or("ClusterIP").into(),
+                cluster_ip: s["clusterIP"].as_str().unwrap_or("None").into(),
+                ports: s["ports"]
+                    .as_array()
+                    .map(|ps| {
+                        ps.iter()
+                            .map(|p| {
+                                format!(
+                                    "{}/{}",
+                                    p["port"].as_i64().unwrap_or(0),
+                                    p["protocol"].as_str().unwrap_or("TCP")
+                                )
+                            })
+                            .collect()
                     })
-                    .collect()
-            })
-            .unwrap_or_default();
-        result.push(ServiceInfo {
-            name,
-            namespace,
-            service_type: svc_type,
-            cluster_ip,
-            ports,
-            age: age_from_timestamp(created),
-        });
-    }
-    Ok(result)
+                    .unwrap_or_default(),
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+            }
+        })
+        .collect())
 }
 
-pub async fn get_pod_logs(ns: &str, pod: &str) -> Result<String, String> {
-    let path = format!("/api/v1/namespaces/{}/pods/{}/log?tailLines=200", ns, pod);
-    let (base, client) = k8s_base();
-    let url = format!("{}{}", base, path);
-    let token = env::var("K8S_TOKEN").unwrap_or_default();
-    let mut req = client.get(&url);
-    if !token.is_empty() {
-        req = req.header("Authorization", format!("Bearer {}", token));
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("K8s API error: {}", e))?;
-    resp.text().await.map_err(|e| format!("Text error: {}", e))
+pub async fn list_nodes(kc: &str) -> Result<Vec<NodeInfo>, String> {
+    let data = k8s_get(kc, "/api/v1/nodes").await?;
+    let Some(items) = data["items"].as_array() else {
+        return Ok(vec![]);
+    };
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            let s = &i["status"];
+            let empty_obj = serde_json::json!({});
+            let cap = &s.get("capacity").unwrap_or(&empty_obj);
+            NodeInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                status: s["conditions"]
+                    .as_array()
+                    .map(|cs| {
+                        cs.iter()
+                            .find(|c| c["type"].as_str() == Some("Ready"))
+                            .map(|c| {
+                                if c["status"].as_str() == Some("True") {
+                                    "Ready"
+                                } else {
+                                    "NotReady"
+                                }
+                            })
+                            .unwrap_or("Unknown")
+                    })
+                    .unwrap_or("Unknown")
+                    .into(),
+                roles: m["labels"]["kubernetes.io/role"]
+                    .as_str()
+                    .unwrap_or("worker")
+                    .into(),
+                version: s["nodeInfo"]["kubeletVersion"]
+                    .as_str()
+                    .unwrap_or("")
+                    .into(),
+                cpu: cap["cpu"].as_str().unwrap_or("?").into(),
+                memory: cap["memory"].as_str().unwrap_or("?").into(),
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+            }
+        })
+        .collect())
+}
+
+pub async fn list_pvcs(kc: &str, ns: Option<&str>) -> Result<Vec<PvcInfo>, String> {
+    let path = ns.map_or("/api/v1/persistentvolumeclaims".into(), |n| {
+        format!("/api/v1/namespaces/{}/persistentvolumeclaims", n)
+    });
+    let data = k8s_get(kc, &path).await?;
+    let Some(items) = data["items"].as_array() else {
+        return Ok(vec![]);
+    };
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            let s = &i["spec"];
+            let st = &i["status"];
+            PvcInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                namespace: m["namespace"].as_str().unwrap_or("").into(),
+                status: st["phase"].as_str().unwrap_or("Pending").into(),
+                capacity: s["resources"]["requests"]["storage"]
+                    .as_str()
+                    .unwrap_or("?")
+                    .into(),
+                storage_class: s["storageClassName"].as_str().unwrap_or("-").into(),
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+            }
+        })
+        .collect())
+}
+
+pub async fn list_configmaps(kc: &str, ns: Option<&str>) -> Result<Vec<ConfigMapInfo>, String> {
+    let path = ns.map_or("/api/v1/configmaps".into(), |n| {
+        format!("/api/v1/namespaces/{}/configmaps", n)
+    });
+    let data = k8s_get(kc, &path).await?;
+    let Some(items) = data["items"].as_array() else {
+        return Ok(vec![]);
+    };
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            ConfigMapInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                namespace: m["namespace"].as_str().unwrap_or("").into(),
+                keys: i["data"]
+                    .as_object()
+                    .map(|o| o.keys().cloned().collect())
+                    .unwrap_or_default(),
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+            }
+        })
+        .collect())
+}
+
+pub async fn list_secrets(kc: &str, ns: Option<&str>) -> Result<Vec<SecretInfo>, String> {
+    let path = ns.map_or("/api/v1/secrets".into(), |n| {
+        format!("/api/v1/namespaces/{}/secrets", n)
+    });
+    let data = k8s_get(kc, &path).await?;
+    let Some(items) = data["items"].as_array() else {
+        return Ok(vec![]);
+    };
+    Ok(items
+        .iter()
+        .map(|i| {
+            let m = &i["metadata"];
+            SecretInfo {
+                name: m["name"].as_str().unwrap_or("").into(),
+                namespace: m["namespace"].as_str().unwrap_or("").into(),
+                secret_type: i["type"].as_str().unwrap_or("Opaque").into(),
+                keys: i["data"]
+                    .as_object()
+                    .map(|o| o.keys().cloned().collect())
+                    .unwrap_or_default(),
+                age: age(m["creationTimestamp"].as_str().unwrap_or("")),
+            }
+        })
+        .collect())
+}
+
+pub async fn get_pod_logs(kc: &str, ns: &str, pod: &str) -> Result<String, String> {
+    k8s_get_raw(
+        kc,
+        &format!("/api/v1/namespaces/{}/pods/{}/log?tailLines=200", ns, pod),
+    )
+    .await
+}
+
+pub async fn get_resource_yaml(kc: &str, path: &str) -> Result<String, String> {
+    k8s_get_raw(kc, path).await
+}
+
+pub async fn create_deployment_api(
+    kc: &str,
+    req: &CreateDeploymentRequest,
+) -> Result<Value, String> {
+    let body = serde_json::json!({
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": req.name, "namespace": req.namespace},
+        "spec": {
+            "replicas": req.replicas.unwrap_or(1),
+            "selector": {"matchLabels": {"app": req.name}},
+            "template": {
+                "metadata": {"labels": {"app": req.name}},
+                "spec": {"containers": [{
+                    "name": req.name,
+                    "image": req.image,
+                    "ports": [{"containerPort": req.port.unwrap_or(8080)}]
+                }]}
+            }
+        }
+    });
+    k8s_post(
+        kc,
+        &format!("/apis/apps/v1/namespaces/{}/deployments", req.namespace),
+        &body,
+    )
+    .await
 }
