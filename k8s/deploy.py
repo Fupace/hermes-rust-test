@@ -220,24 +220,34 @@ create_or_update("Deployment", APP, f"/apis/apps/v1/namespaces/{NS}/deployments"
 })
 wait_rollout("deployment", APP, NS)
 
-# --- 4. IngressRoutes ---
-print("\n--- IngressRoutes ---")
-create_or_update("IngressRoute", APP + "-http", f"/apis/traefik.containo.us/v1alpha1/namespaces/{NS}/ingressroutes", {
-    "apiVersion": "traefik.containo.us/v1alpha1", "kind": "IngressRoute",
-    "metadata": {"name": APP + "-http", "namespace": NS},
+# --- 4. Standard Ingress (preferred per skill #25) ---
+print("\n--- Ingress ---")
+create_or_update("Ingress", APP + "-http", f"/apis/networking.k8s.io/v1/namespaces/{NS}/ingresses", {
+    "apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+    "metadata": {
+        "name": APP + "-http", "namespace": NS,
+        "annotations": {
+            "traefik.ingress.kubernetes.io/router.entrypoints": "web",
+            "traefik.ingress.kubernetes.io/router.middlewares": "abm-production-redirect-https@kubernetescrd",
+        }
+    },
     "spec": {
-        "entryPoints": ["web"],
-        "routes": [{"kind": "Rule", "match": f"Host(`{DOMAIN}`)", "middlewares": [{"name": "redirect-https"}], "services": [{"name": APP, "port": 8080}]}]
+        "rules": [{"host": DOMAIN, "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": APP, "port": {"number": 8080}}}}]}}]
     }
 })
 
-create_or_update("IngressRoute", APP, f"/apis/traefik.containo.us/v1alpha1/namespaces/{NS}/ingressroutes", {
-    "apiVersion": "traefik.containo.us/v1alpha1", "kind": "IngressRoute",
-    "metadata": {"name": APP, "namespace": NS},
+create_or_update("Ingress", APP, f"/apis/networking.k8s.io/v1/namespaces/{NS}/ingresses", {
+    "apiVersion": "networking.k8s.io/v1", "kind": "Ingress",
+    "metadata": {
+        "name": APP, "namespace": NS,
+        "annotations": {
+            "traefik.ingress.kubernetes.io/router.entrypoints": "websecure",
+            "traefik.ingress.kubernetes.io/router.tls": "true",
+        }
+    },
     "spec": {
-        "entryPoints": ["websecure"],
-        "routes": [{"kind": "Rule", "match": f"Host(`{DOMAIN}`)", "services": [{"name": APP, "port": 8080}]}],
-        "tls": {"secretName": "steedgrace-com-tls-secret"}
+        "tls": [{"hosts": [DOMAIN], "secretName": "steedgrace-com-tls-secret"}],
+        "rules": [{"host": DOMAIN, "http": {"paths": [{"path": "/", "pathType": "Prefix", "backend": {"service": {"name": APP, "port": {"number": 8080}}}}]}}]
     }
 })
 
