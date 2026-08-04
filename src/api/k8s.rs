@@ -4,15 +4,33 @@ use serde_json::Value;
 use std::env;
 
 fn k8s_base() -> (String, Client) {
+    use base64::Engine;
+
     let host = env::var("K8S_HOST").unwrap_or_else(|_| "kubernetes.default.svc".into());
     let port = env::var("K8S_PORT").unwrap_or_else(|_| "443".into());
     let base = format!("https://{}:{}", host, port);
 
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .build()
-        .unwrap_or_default();
+    let cert_b64 = env::var("K8S_CLIENT_CERT_B64").unwrap_or_default();
+    let key_b64 = env::var("K8S_CLIENT_KEY_B64").unwrap_or_default();
 
+    let mut builder = Client::builder().danger_accept_invalid_certs(true);
+
+    if !cert_b64.is_empty() && !key_b64.is_empty() {
+        let cert_pem = base64::engine::general_purpose::STANDARD
+            .decode(&cert_b64)
+            .unwrap_or_default();
+        let key_pem = base64::engine::general_purpose::STANDARD
+            .decode(&key_b64)
+            .unwrap_or_default();
+        let identity_pem = String::from_utf8_lossy(&cert_pem).to_string()
+            + "\n"
+            + &String::from_utf8_lossy(&key_pem);
+        if let Ok(identity) = reqwest::Identity::from_pem(identity_pem.as_bytes()) {
+            builder = builder.identity(identity);
+        }
+    }
+
+    let client = builder.build().unwrap_or_default();
     (base, client)
 }
 
