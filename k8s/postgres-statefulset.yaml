@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hermes-rust-test-postgres
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: hermes-rust-test-postgres
+spec:
+  serviceName: hermes-rust-test-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-rust-test-postgres
+  template:
+    metadata:
+      labels:
+        app: hermes-rust-test-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: "HEWKe3BLq2Fzak+3bVEUuQ=="
+            - name: POSTGRES_DB
+              value: k8s_platform
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

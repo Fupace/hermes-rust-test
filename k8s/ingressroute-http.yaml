@@ -1,0 +1,16 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: ${APP_NAME}-http
+  namespace: ${K8S_NAMESPACE}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: Host(`${DOMAIN}`)
+      middlewares:
+        - name: redirect-https
+      services:
+        - name: ${APP_NAME}
+          port: 8080
