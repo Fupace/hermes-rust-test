@@ -47,7 +47,7 @@ def api(method, path, body=None):
 
 def create_or_update(kind, name, col_path, body):
     """Create resource, or update if exists."""
-    res_path = col_path.rsplit("/", 1)[0] + "/" + name
+    res_path = col_path + "/" + name
     existing = api("GET", res_path)
     if existing:
         if kind == "StatefulSet":
