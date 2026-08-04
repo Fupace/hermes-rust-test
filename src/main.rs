@@ -38,46 +38,46 @@ async fn main() {
             get(api::handlers::list_clusters).post(api::handlers::add_cluster),
         )
         .route(
-            "/api/clusters/{id}",
+            "/api/clusters/:id",
             get(api::handlers::get_cluster).delete(api::handlers::delete_cluster),
         )
         .route(
-            "/api/clusters/{id}/summary",
+            "/api/clusters/:id/summary",
             get(api::handlers::cluster_summary),
         )
-        .route("/api/clusters/{id}/pods", get(api::handlers::list_pods))
+        .route("/api/clusters/:id/pods", get(api::handlers::list_pods))
         .route(
-            "/api/clusters/{id}/deployments",
+            "/api/clusters/:id/deployments",
             get(api::handlers::list_deployments).post(api::handlers::create_deployment),
         )
         .route(
-            "/api/clusters/{id}/services",
+            "/api/clusters/:id/services",
             get(api::handlers::list_services),
         )
-        .route("/api/clusters/{id}/nodes", get(api::handlers::list_nodes))
-        .route("/api/clusters/{id}/pvcs", get(api::handlers::list_pvcs))
+        .route("/api/clusters/:id/nodes", get(api::handlers::list_nodes))
+        .route("/api/clusters/:id/pvcs", get(api::handlers::list_pvcs))
         .route(
-            "/api/clusters/{id}/configmaps",
+            "/api/clusters/:id/configmaps",
             get(api::handlers::list_configmaps),
         )
         .route(
-            "/api/clusters/{id}/secrets",
+            "/api/clusters/:id/secrets",
             get(api::handlers::list_secrets),
         )
         .route(
-            "/api/clusters/{id}/namespaces",
+            "/api/clusters/:id/namespaces",
             get(api::handlers::list_namespaces),
         )
         .route(
-            "/api/clusters/{id}/namespaces/{ns}/pods/{pod}/logs",
+            "/api/clusters/:id/namespaces/:ns/pods/:pod/logs",
             get(api::handlers::pod_logs),
         )
         .route(
-            "/api/clusters/{id}/namespaces/{ns}/pods/{pod}/yaml",
+            "/api/clusters/:id/namespaces/:ns/pods/:pod/yaml",
             get(api::handlers::pod_yaml),
         )
         .route(
-            "/api/clusters/{id}/namespaces/{ns}/deployments/{name}/yaml",
+            "/api/clusters/:id/namespaces/:ns/deployments/:name/yaml",
             get(api::handlers::deployment_yaml),
         )
         .nest_service("/", ServeDir::new("static"))
