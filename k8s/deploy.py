@@ -186,7 +186,7 @@ db_secret_body = {
     "data": {
         "POSTGRES_USER": base64.b64encode(PG_USER.encode()).decode(),
         "POSTGRES_PASSWORD": base64.b64encode(PG_PASS.encode()).decode(),
-        "POSTGRES_DB": base64.b64encode(chr(107)+chr(56)+chr(115)+chr(95)+chr(112)+chr(108)+chr(97)+chr(116)+chr(102)+chr(111)+chr(114)+chr(109).encode()).decode(),
+        "POSTGRES_DB": base64.b64encode((chr(107)+chr(56)+chr(115)+chr(95)+chr(112)+chr(108)+chr(97)+chr(116)+chr(102)+chr(111)+chr(114)+chr(109)).encode()).decode(),
         "DATABASE_URL": base64.b64encode(db_url.encode()).decode(),
     }
 }
