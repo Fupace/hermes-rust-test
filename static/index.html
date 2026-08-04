@@ -8,7 +8,16 @@
 <body>
 <nav class="topbar">
   <div class="logo">⚓ Hermes K8s</div>
-  <div class="nav-links" id="navLinks"></div>
+  <div class="nav-links" id="navLinks">
+    <a href="#" data-page="dashboard" style="display:none">概览</a>
+    <a href="#" data-page="pods" style="display:none">Pods</a>
+    <a href="#" data-page="deployments" style="display:none">Deployments</a>
+    <a href="#" data-page="services" style="display:none">Services</a>
+    <a href="#" data-page="nodes" style="display:none">节点</a>
+    <a href="#" data-page="pvcs" style="display:none">PVC</a>
+    <a href="#" data-page="configmaps" style="display:none">ConfigMap</a>
+    <a href="#" data-page="secrets" style="display:none">Secrets</a>
+  </div>
   <div class="nav-right">
     <select id="clusterSelect" class="cluster-select"><option value="">选择集群...</option></select>
     <button class="btn btn-primary btn-sm" onclick="toggleAddForm()">+ 添加</button>
@@ -19,7 +28,7 @@
 <main class="content" id="mainContent">
   <section id="page-clusters" class="page active">
     <h2>集群管理</h2>
-    <div id="clusterList" class="cluster-grid"></div>
+    <div id="clusterList"></div>
     <div class="add-cluster-form" id="addClusterForm" style="display:none">
       <h3>添加集群</h3>
       <input id="clusterName" placeholder="集群名称" class="input">
